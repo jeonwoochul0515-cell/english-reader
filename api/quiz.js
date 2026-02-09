@@ -13,47 +13,51 @@ export default async function handler(req, res) {
     ? `Based on these vocabulary words and their meanings:
 ${context}
 
-Create a 4-question multiple choice quiz testing these words. Respond ONLY with JSON (no markdown):
+Create a 4-question multiple choice quiz testing these words. Respond ONLY with JSON (no markdown, no backticks):
 {
   "questions": [
     {
       "question": "단어의 뜻을 묻는 한국어 질문",
       "options": ["선택지1", "선택지2", "선택지3", "선택지4"],
-      "answer": "정답 선택지"
+      "answer": "정답 선택지 (options 중 하나와 정확히 일치)"
     }
   ]
 }`
     : `Based on this English text passage:
 "${context}"
 
-Create a 3-question reading comprehension quiz IN KOREAN testing understanding. Respond ONLY with JSON (no markdown):
+Create a 3-question reading comprehension quiz IN KOREAN testing understanding. Respond ONLY with JSON (no markdown, no backticks):
 {
   "questions": [
     {
       "question": "내용 이해를 묻는 한국어 질문",
       "options": ["선택지1", "선택지2", "선택지3", "선택지4"],
-      "answer": "정답 선택지"
+      "answer": "정답 선택지 (options 중 하나와 정확히 일치)"
     }
   ]
 }`;
 
   try {
-    const response = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-api-key": process.env.CLAUDE_API_KEY,
-        "anthropic-version": "2023-06-01",
-      },
-      body: JSON.stringify({
-        model: "claude-sonnet-4-20250514",
-        max_tokens: 1000,
-        messages: [{ role: "user", content: prompt }],
-      }),
-    });
+    const response = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${process.env.GEMINI_API_KEY}`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          contents: [{
+            parts: [{ text: prompt }]
+          }],
+          generationConfig: {
+            temperature: 0.5,
+            maxOutputTokens: 1000,
+            responseMimeType: "application/json"
+          }
+        })
+      }
+    );
 
     const data = await response.json();
-    const text = data.content.map(c => c.text || "").join("");
+    const text = data.candidates?.[0]?.content?.parts?.[0]?.text || "";
     const parsed = JSON.parse(text.replace(/```json|```/g, "").trim());
 
     return res.status(200).json(parsed);

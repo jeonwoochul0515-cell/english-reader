@@ -1,5 +1,4 @@
 export default async function handler(req, res) {
-  // POST 요청만 허용
   if (req.method !== "POST") {
     return res.status(405).json({ error: "Method not allowed" });
   }
@@ -11,22 +10,18 @@ export default async function handler(req, res) {
   }
 
   try {
-    const response = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-api-key": process.env.CLAUDE_API_KEY,
-        "anthropic-version": "2023-06-01",
-      },
-      body: JSON.stringify({
-        model: "claude-sonnet-4-20250514",
-        max_tokens: 500,
-        messages: [{
-          role: "user",
-          content: `You are an English-Korean dictionary AI for Korean learners. A user clicked the word "${word}" in this sentence:
+    const response = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${process.env.GEMINI_API_KEY}`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          contents: [{
+            parts: [{
+              text: `You are an English-Korean dictionary AI for Korean learners. A user clicked the word "${word}" in this sentence:
 "${sentence}"
 
-Respond ONLY with a JSON object (no markdown, no backticks):
+Respond ONLY with a JSON object (no markdown, no backticks, no extra text):
 {
   "word": "${word}",
   "phonetic": "IPA pronunciation",
@@ -37,12 +32,19 @@ Respond ONLY with a JSON object (no markdown, no backticks):
 }
 
 The meaning MUST reflect the word's usage in THIS specific sentence, not a generic definition.`
-        }],
-      }),
-    });
+            }]
+          }],
+          generationConfig: {
+            temperature: 0.3,
+            maxOutputTokens: 500,
+            responseMimeType: "application/json"
+          }
+        })
+      }
+    );
 
     const data = await response.json();
-    const text = data.content.map(c => c.text || "").join("");
+    const text = data.candidates?.[0]?.content?.parts?.[0]?.text || "";
     const parsed = JSON.parse(text.replace(/```json|```/g, "").trim());
 
     return res.status(200).json(parsed);

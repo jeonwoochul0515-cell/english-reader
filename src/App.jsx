@@ -1,17 +1,8 @@
 import { useState, useRef, useCallback, useEffect, useMemo } from "react";
+import * as pdfjsLib from "pdfjs-dist";
 
-const samplePages = [
-  { id: 1, text: `Alice was beginning to get very tired of sitting by her sister on the bank, and of having nothing to do: once or twice she had peeped into the book her sister was reading, but it had no pictures or conversations in it, "and what is the use of a book," thought Alice "without pictures or conversations?"\n\nSo she was considering in her own mind (as well as she could, for the hot day made her feel very sleepy and stupid), whether the pleasure of making a daisy-chain would be worth the trouble of getting up and picking the daisies, when suddenly a White Rabbit with pink eyes ran close by her.` },
-  { id: 2, text: `There was nothing so very remarkable in that; nor did Alice think it so very much out of the way to hear the Rabbit say to itself, "Oh dear! Oh dear! I shall be late!" (when she thought it over afterwards, it occurred to her that she ought to have wondered at this, but at the time it all seemed quite natural); but when the Rabbit actually took a watch out of its waistcoat-pocket, and looked at it, and then hurried on, Alice started to her feet.\n\nFor it flashed across her mind that she had never before seen a rabbit with either a waistcoat-pocket, or a watch to take out of it, and burning with curiosity, she ran across the field after it.` },
-  { id: 3, text: `The rabbit-hole went straight on like a tunnel for some way, and then dipped suddenly down, so suddenly that Alice had not a moment to think about stopping herself before she found herself falling down a very deep well.\n\nEither the well was very deep, or she fell very slowly, for she had plenty of time as she went down to look about her and to wonder what was going to happen next. First, she tried to look down and make out what she was coming to, but it was too dark to see anything.` },
-  { id: 4, text: `"Curiouser and curiouser!" cried Alice (she was so much surprised, that for the moment she quite forgot how to speak good English); "now I'm opening out like the largest telescope that ever was! Good-bye, feet!" (for when she looked down at her feet, they seemed to be almost out of sight, they were getting so far off).\n\n"Oh, my poor little feet, I wonder who will put on your shoes and stockings for you now, dears? I'm sure I shan't be able! I shall be a great deal too far off to trouble myself about you."` },
-  { id: 5, text: `Soon her eye fell on a little glass box that was lying under the table: she opened it, and found in it a very small cake, on which the words "EAT ME" were beautifully marked in currants. "Well, I'll eat it," said Alice, "and if it makes me grow larger, I can reach the key; and if it makes me grow smaller, I can creep under the door; so either way I'll get into the garden, and I don't care which happens!"\n\nShe ate a little bit, and said anxiously to herself, "Which way? Which way?", holding her hand on the top of her head to feel which way it was growing, and she was quite surprised to find that she remained the same size.` }
-];
-
-const recentBooks = [
-  { title: "Alice in Wonderland", author: "Lewis Carroll", progress: 32 },
-  { title: "The Little Prince", author: "Antoine de Saint-Exupéry", progress: 68 },
-];
+// PDF.js 워커 설정
+pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
 
 const Icon = ({ d, size = 22 }) => (
   <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d={d}/></svg>
@@ -26,16 +17,45 @@ const TrashIcon = () => <Icon d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6
 const ChevronUp = () => <Icon d="M18 15l-6-6-6 6" />;
 const ChevronDown = () => <Icon d="M6 9l6 6 6-6" />;
 const SaveIcon = () => <Icon d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2zM17 21v-8H7v8M7 3v5h8" size={16} />;
+const BackIcon = () => <Icon d="M19 12H5M12 19l-7-7 7-7" />;
 
 function splitSentences(text) {
+  if (!text || !text.trim()) return ["(이 페이지에 텍스트가 없습니다)"];
   const r = [];
-  const re = /[^.!?"]+[.!?"]*\s*/g;
-  let m;
-  while ((m = re.exec(text)) !== null) { const s = m[0].trim(); if (s) r.push(s); }
-  return r.length > 0 ? r : [text];
+  // Split by sentence-ending punctuation, keeping the punctuation
+  const parts = text.replace(/\n+/g, " ").split(/(?<=[.!?])\s+/);
+  for (const p of parts) {
+    const trimmed = p.trim();
+    if (trimmed.length > 0) {
+      // If sentence is very long, split further by commas/semicolons
+      if (trimmed.length > 200) {
+        const subs = trimmed.split(/(?<=[,;])\s+/);
+        for (const s of subs) { if (s.trim()) r.push(s.trim()); }
+      } else {
+        r.push(trimmed);
+      }
+    }
+  }
+  return r.length > 0 ? r : ["(이 페이지에 텍스트가 없습니다)"];
 }
 
-// AI 사전: Vercel API Route를 통해 안전하게 호출
+// PDF 텍스트 추출
+async function extractPdfText(file) {
+  const arrayBuffer = await file.arrayBuffer();
+  const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+  const pages = [];
+  for (let i = 1; i <= pdf.numPages; i++) {
+    const pg = await pdf.getPage(i);
+    const content = await pg.getTextContent();
+    const text = content.items.map(item => item.str).join(" ").replace(/\s+/g, " ").trim();
+    if (text) {
+      pages.push({ id: i, text });
+    }
+  }
+  return pages;
+}
+
+// API 호출
 async function fetchAIDef(word, sentence) {
   try {
     const res = await fetch("/api/dictionary", {
@@ -45,13 +65,9 @@ async function fetchAIDef(word, sentence) {
     });
     if (!res.ok) throw new Error("API error");
     return await res.json();
-  } catch (e) {
-    console.error("AI err:", e);
-    return null;
-  }
+  } catch (e) { console.error("AI err:", e); return null; }
 }
 
-// AI 퀴즈: Vercel API Route를 통해 안전하게 호출
 async function fetchAIQuiz(type, context) {
   try {
     const res = await fetch("/api/quiz", {
@@ -61,10 +77,7 @@ async function fetchAIQuiz(type, context) {
     });
     if (!res.ok) throw new Error("API error");
     return await res.json();
-  } catch (e) {
-    console.error("Quiz err:", e);
-    return null;
-  }
+  } catch (e) { console.error("Quiz err:", e); return null; }
 }
 
 const Spinner = ({ text = "AI 분석 중..." }) => (
@@ -74,27 +87,21 @@ const Spinner = ({ text = "AI 분석 중..." }) => (
   </div>
 );
 
-// localStorage 헬퍼
-function loadLocal(key, fallback) {
-  try {
-    const v = localStorage.getItem(key);
-    return v ? JSON.parse(v) : fallback;
-  } catch { return fallback; }
-}
-function saveLocal(key, val) {
-  try { localStorage.setItem(key, JSON.stringify(val)); } catch {}
-}
+function loadLocal(key, fb) { try { const v = localStorage.getItem(key); return v ? JSON.parse(v) : fb; } catch { return fb; } }
+function saveLocal(key, val) { try { localStorage.setItem(key, JSON.stringify(val)); } catch {} }
 
 export default function App() {
   const [view, setView] = useState("home");
   const [panel, setPanel] = useState(null);
-  const [page, setPage] = useState(() => loadLocal("reader-page", 0));
-  const [currentLine, setCurrentLine] = useState(() => loadLocal("reader-line", 0));
+  const [pages, setPages] = useState([]);
+  const [bookTitle, setBookTitle] = useState("");
+  const [page, setPage] = useState(0);
+  const [currentLine, setCurrentLine] = useState(0);
   const [vocab, setVocab] = useState(() => loadLocal("reader-vocab", []));
   const [tooltip, setTooltip] = useState(null);
   const [tooltipLoading, setTooltipLoading] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
-  const [bookLoaded, setBookLoaded] = useState(false);
+  const [pdfLoading, setPdfLoading] = useState(false);
   const [quizMode, setQuizMode] = useState(null);
   const [quizData, setQuizData] = useState(null);
   const [quizLoading, setQuizLoading] = useState(false);
@@ -104,14 +111,14 @@ export default function App() {
   const fileRef = useRef(null);
   const wordCache = useRef(loadLocal("reader-cache", {}));
 
-  const totalPages = samplePages.length;
+  const totalPages = pages.length;
   const progress = totalPages > 0 ? ((page + 1) / totalPages) * 100 : 0;
-  const lines = useMemo(() => splitSentences(samplePages[page].text), [page]);
+  const lines = useMemo(() => {
+    if (pages.length === 0 || page >= pages.length) return ["PDF를 업로드해 주세요."];
+    return splitSentences(pages[page].text);
+  }, [page, pages]);
 
-  // 자동 저장
   useEffect(() => { saveLocal("reader-vocab", vocab); }, [vocab]);
-  useEffect(() => { saveLocal("reader-page", page); }, [page]);
-  useEffect(() => { saveLocal("reader-line", currentLine); }, [currentLine]);
 
   useEffect(() => { setCurrentLine(0); }, [page]);
 
@@ -135,15 +142,47 @@ export default function App() {
     return () => window.removeEventListener("keydown", handler);
   }, [view, currentLine, page, lines.length, tooltip]);
 
+  // PDF 업로드 처리
+  const handleFileUpload = async (file) => {
+    if (!file || file.type !== "application/pdf") {
+      alert("PDF 파일만 업로드할 수 있습니다.");
+      return;
+    }
+    setPdfLoading(true);
+    try {
+      const extracted = await extractPdfText(file);
+      if (extracted.length === 0) {
+        alert("PDF에서 텍스트를 추출할 수 없습니다. 이미지 기반 PDF일 수 있습니다.");
+        setPdfLoading(false);
+        return;
+      }
+      const name = file.name.replace(".pdf", "").replace(/[_-]/g, " ");
+      setBookTitle(name);
+      setPages(extracted);
+      setPage(0);
+      setCurrentLine(0);
+      setView("reader");
+      setPanel(null);
+    } catch (err) {
+      console.error("PDF error:", err);
+      alert("PDF 파일을 읽는 중 오류가 발생했습니다.");
+    }
+    setPdfLoading(false);
+  };
+
+  const onFileInput = (e) => {
+    const file = e.target.files?.[0];
+    if (file) handleFileUpload(file);
+    e.target.value = "";
+  };
+
   const handleWordClick = async (word, sentence) => {
     const clean = word.toLowerCase().replace(/[^a-z'-]/g, "");
     if (!clean || clean.length < 2) return;
     const ck = `${clean}::${sentence.slice(0, 60)}`;
     if (wordCache.current[ck]) { setTooltip(wordCache.current[ck]); return; }
-
     setTooltipLoading(true);
     setTooltip({ word: clean, phonetic: "", pos: "", meaning: "AI가 문맥을 분석 중...", contextMeaning: "", example: "" });
-
     const result = await fetchAIDef(clean, sentence);
     if (result) {
       wordCache.current[ck] = result;
@@ -163,28 +202,27 @@ export default function App() {
   };
   const removeFromVocab = (id) => setVocab(prev => prev.filter(v => v.id !== id));
 
-  const loadBook = () => { setBookLoaded(true); setView("reader"); setPanel(null); };
-
   const handleDragOver = useCallback((e) => { e.preventDefault(); setIsDragging(true); }, []);
   const handleDragLeave = useCallback(() => setIsDragging(false), []);
-  const handleDrop = useCallback((e) => { e.preventDefault(); setIsDragging(false); loadBook(); }, []);
+  const handleDrop = useCallback((e) => {
+    e.preventDefault();
+    setIsDragging(false);
+    const file = e.dataTransfer.files?.[0];
+    if (file) handleFileUpload(file);
+  }, []);
 
   const startQuiz = async (type) => {
-    setQuizMode(type);
-    setQuizLoading(true);
-    setQuizData(null);
-    setQuizIdx(0);
-    setQuizAnswer(null);
-    setQuizScore(0);
+    setQuizMode(type); setQuizLoading(true); setQuizData(null);
+    setQuizIdx(0); setQuizAnswer(null); setQuizScore(0);
     let ctx;
     if (type === "vocab") {
       ctx = vocab.map(v => `${v.word}: ${v.meaning}`).join("\n");
     } else {
-      ctx = samplePages.slice(0, page + 1).map(p => p.text).join("\n\n");
+      const start = Math.max(0, page - 2);
+      ctx = pages.slice(start, page + 1).map(p => p.text).join("\n\n");
     }
     const data = await fetchAIQuiz(type, ctx);
-    setQuizData(data);
-    setQuizLoading(false);
+    setQuizData(data); setQuizLoading(false);
   };
 
   const handleQuizAnswer = (opt) => {
@@ -192,7 +230,6 @@ export default function App() {
     setQuizAnswer(opt);
     if (quizData && quizData.questions[quizIdx].answer === opt) setQuizScore(s => s + 1);
   };
-
   const nextQuizQ = () => {
     if (quizData && quizIdx < quizData.questions.length - 1) { setQuizIdx(i => i + 1); setQuizAnswer(null); }
   };
@@ -222,7 +259,7 @@ export default function App() {
   ];
 
   const handleSidebarClick = (id) => {
-    if (id === "home") { setPanel(null); setView(bookLoaded ? "reader" : "home"); }
+    if (id === "home") { setPanel(null); setView("home"); }
     else setPanel(panel === id ? null : id);
   };
 
@@ -240,8 +277,8 @@ export default function App() {
             style={{
               width: 52, height: 52, border: "none", borderRadius: 12, cursor: "pointer", position: "relative",
               display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 2,
-              background: (panel === item.id || (item.id === "home" && !panel)) ? "rgba(59,130,246,0.15)" : "transparent",
-              color: (panel === item.id || (item.id === "home" && !panel)) ? "#60A5FA" : "#6B7280",
+              background: (panel === item.id || (item.id === "home" && !panel && view === "home")) ? "rgba(59,130,246,0.15)" : "transparent",
+              color: (panel === item.id || (item.id === "home" && !panel && view === "home")) ? "#60A5FA" : "#6B7280",
               transition: "all 0.2s"
             }}>
             {item.icon}
@@ -303,16 +340,18 @@ export default function App() {
             <div style={{ padding: 16 }}>
               {!quizMode ? (
                 <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-                  <div style={{ background: "rgba(129,140,248,0.08)", borderRadius: 10, padding: 12, border: "1px solid rgba(129,140,248,0.2)", marginBottom: 4 }}>
-                    <p style={{ fontSize: 13, color: "#A5B4FC", margin: 0 }}>🤖 AI가 퀴즈를 자동 생성합니다!</p>
-                  </div>
+                  {pages.length === 0 && (
+                    <div style={{ background: "rgba(239,68,68,0.08)", borderRadius: 10, padding: 12, border: "1px solid rgba(239,68,68,0.2)", marginBottom: 4 }}>
+                      <p style={{ fontSize: 13, color: "#FCA5A5", margin: 0 }}>⚠️ 먼저 PDF를 업로드하고 읽기를 시작해 주세요.</p>
+                    </div>
+                  )}
                   <button onClick={() => startQuiz("vocab")} disabled={vocab.length < 3}
                     style={{ padding: 20, background: vocab.length < 3 ? "#1F2937" : "rgba(59,130,246,0.1)", border: `1px solid ${vocab.length < 3 ? "#374151" : "rgba(59,130,246,0.3)"}`, borderRadius: 12, cursor: vocab.length < 3 ? "default" : "pointer", textAlign: "left", opacity: vocab.length < 3 ? 0.5 : 1 }}>
                     <div style={{ fontWeight: 700, fontSize: 15, color: "#60A5FA" }}>📝 단어 퀴즈</div>
                     <div style={{ fontSize: 13, color: "#6B7280", marginTop: 4 }}>최소 3개 단어 필요 (현재 {vocab.length}개)</div>
                   </button>
-                  <button onClick={() => startQuiz("comprehension")}
-                    style={{ padding: 20, background: "rgba(52,211,153,0.1)", border: "1px solid rgba(52,211,153,0.3)", borderRadius: 12, cursor: "pointer", textAlign: "left" }}>
+                  <button onClick={() => startQuiz("comprehension")} disabled={pages.length === 0}
+                    style={{ padding: 20, background: pages.length === 0 ? "#1F2937" : "rgba(52,211,153,0.1)", border: `1px solid ${pages.length === 0 ? "#374151" : "rgba(52,211,153,0.3)"}`, borderRadius: 12, cursor: pages.length === 0 ? "default" : "pointer", textAlign: "left", opacity: pages.length === 0 ? 0.5 : 1 }}>
                     <div style={{ fontWeight: 700, fontSize: 15, color: "#34D399" }}>📖 내용 이해 퀴즈</div>
                     <div style={{ fontSize: 13, color: "#6B7280", marginTop: 4 }}>읽은 내용 기반 AI 퀴즈</div>
                   </button>
@@ -369,7 +408,7 @@ export default function App() {
             <div style={{ padding: 16, display: "flex", flexDirection: "column", gap: 20 }}>
               <div style={{ background: "rgba(52,211,153,0.08)", borderRadius: 12, padding: 14, border: "1px solid rgba(52,211,153,0.2)" }}>
                 <p style={{ fontSize: 14, fontWeight: 700, color: "#34D399", margin: "0 0 6px" }}>✅ 모든 기능 자동 동작!</p>
-                <p style={{ fontSize: 13, color: "#9CA3AF", margin: 0 }}>AI 사전 · 퀴즈 · 자동저장</p>
+                <p style={{ fontSize: 13, color: "#9CA3AF", margin: 0 }}>PDF 업로드 · AI 사전 · 퀴즈 · 자동저장</p>
               </div>
               <div>
                 <h3 style={{ fontSize: 14, fontWeight: 700, color: "#D1D5DB", margin: "0 0 8px" }}>⌨️ 단축키</h3>
@@ -398,43 +437,46 @@ export default function App() {
           </div>
         )}
 
+        {/* Home */}
         {view === "home" && (
           <div style={{ flex: 1, overflow: "auto" }}>
             <div style={{ maxWidth: 600, margin: "0 auto", padding: "60px 24px" }}>
               <div style={{ textAlign: "center", marginBottom: 48 }}>
                 <h1 style={{ fontSize: 28, fontWeight: 800, color: "#F9FAFB", margin: "0 0 8px" }}>영어 책 쉽게 읽기</h1>
-                <p style={{ fontSize: 15, color: "#6B7280", margin: "0 0 4px" }}>한 줄씩 집중하며 읽고, 단어를 클릭하면</p>
-                <p style={{ fontSize: 15, color: "#818CF8", margin: 0, fontWeight: 600 }}>🤖 AI가 문맥에 맞는 뜻을 알려줍니다</p>
+                <p style={{ fontSize: 15, color: "#6B7280", margin: "0 0 4px" }}>PDF를 업로드하고 한 줄씩 집중하며 읽어보세요</p>
+                <p style={{ fontSize: 15, color: "#818CF8", margin: 0, fontWeight: 600 }}>🤖 단어를 클릭하면 AI가 문맥에 맞는 뜻을 알려줍니다</p>
               </div>
               <div onDragOver={handleDragOver} onDragLeave={handleDragLeave} onDrop={handleDrop}
-                onClick={() => fileRef.current?.click()}
-                style={{ border: `2px dashed ${isDragging ? "#3B82F6" : "#374151"}`, borderRadius: 16, padding: "48px 24px", textAlign: "center", cursor: "pointer", background: isDragging ? "rgba(59,130,246,0.1)" : "#111827", transition: "all 0.2s", marginBottom: 32 }}>
-                <div style={{ color: isDragging ? "#3B82F6" : "#4B5563", marginBottom: 12 }}><UploadIcon /></div>
-                <p style={{ fontWeight: 600, fontSize: 16, color: "#D1D5DB", margin: "0 0 4px" }}>{isDragging ? "여기에 놓으세요!" : "PDF 파일을 끌어다 놓거나 클릭"}</p>
-                <p style={{ fontSize: 13, color: "#4B5563", margin: 0 }}>지원 형식: PDF</p>
-                <input ref={fileRef} type="file" accept="application/pdf" onChange={loadBook} style={{ display: "none" }} />
+                onClick={() => !pdfLoading && fileRef.current?.click()}
+                style={{ border: `2px dashed ${isDragging ? "#3B82F6" : "#374151"}`, borderRadius: 16, padding: "48px 24px", textAlign: "center", cursor: pdfLoading ? "wait" : "pointer", background: isDragging ? "rgba(59,130,246,0.1)" : "#111827", transition: "all 0.2s", marginBottom: 32 }}>
+                {pdfLoading ? (
+                  <Spinner text="PDF를 읽고 있어요..." />
+                ) : (
+                  <>
+                    <div style={{ color: isDragging ? "#3B82F6" : "#4B5563", marginBottom: 12 }}><UploadIcon /></div>
+                    <p style={{ fontWeight: 600, fontSize: 16, color: "#D1D5DB", margin: "0 0 4px" }}>{isDragging ? "여기에 놓으세요!" : "PDF 파일을 끌어다 놓거나 클릭"}</p>
+                    <p style={{ fontSize: 13, color: "#4B5563", margin: 0 }}>영어 PDF 파일을 올려주세요</p>
+                  </>
+                )}
+                <input ref={fileRef} type="file" accept="application/pdf" onChange={onFileInput} style={{ display: "none" }} />
               </div>
-              {recentBooks.length > 0 && (
-                <div>
-                  <h2 style={{ fontSize: 16, fontWeight: 700, color: "#D1D5DB", margin: "0 0 12px" }}>📖 최근 읽은 책</h2>
-                  <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-                    {recentBooks.map((b, i) => (
-                      <div key={i} onClick={loadBook}
-                        style={{ background: "#111827", borderRadius: 12, padding: 16, cursor: "pointer", border: "1px solid #1F2937", transition: "border-color 0.2s" }}
-                        onMouseEnter={e => e.currentTarget.style.borderColor = "#374151"}
-                        onMouseLeave={e => e.currentTarget.style.borderColor = "#1F2937"}>
-                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                          <div>
-                            <div style={{ fontWeight: 600, fontSize: 15, color: "#F9FAFB" }}>{b.title}</div>
-                            <div style={{ fontSize: 13, color: "#6B7280", marginTop: 2 }}>{b.author}</div>
-                          </div>
-                          <span style={{ fontSize: 13, fontWeight: 600, color: "#60A5FA" }}>{b.progress}%</span>
-                        </div>
-                        <div style={{ marginTop: 10, height: 4, background: "#1F2937", borderRadius: 2 }}>
-                          <div style={{ height: "100%", background: "#3B82F6", borderRadius: 2, width: `${b.progress}%` }} />
-                        </div>
-                      </div>
-                    ))}
+
+              {/* 현재 읽고 있는 책으로 돌아가기 */}
+              {pages.length > 0 && (
+                <div onClick={() => setView("reader")}
+                  style={{ background: "#111827", borderRadius: 12, padding: 16, cursor: "pointer", border: "1px solid #1F2937", transition: "border-color 0.2s", marginBottom: 16 }}
+                  onMouseEnter={e => e.currentTarget.style.borderColor = "#374151"}
+                  onMouseLeave={e => e.currentTarget.style.borderColor = "#1F2937"}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                    <div>
+                      <div style={{ fontSize: 12, color: "#34D399", fontWeight: 600, marginBottom: 4 }}>📖 이어서 읽기</div>
+                      <div style={{ fontWeight: 600, fontSize: 15, color: "#F9FAFB" }}>{bookTitle}</div>
+                      <div style={{ fontSize: 13, color: "#6B7280", marginTop: 2 }}>{totalPages}페이지 · 현재 {page + 1}페이지</div>
+                    </div>
+                    <span style={{ fontSize: 13, fontWeight: 600, color: "#60A5FA" }}>{Math.round(progress)}%</span>
+                  </div>
+                  <div style={{ marginTop: 10, height: 4, background: "#1F2937", borderRadius: 2 }}>
+                    <div style={{ height: "100%", background: "#3B82F6", borderRadius: 2, width: `${progress}%` }} />
                   </div>
                 </div>
               )}
@@ -442,16 +484,23 @@ export default function App() {
           </div>
         )}
 
+        {/* Reader */}
         {view === "reader" && (
           <div style={{ flex: 1, display: "flex", flexDirection: "column", position: "relative" }}
             onClick={() => { if (!tooltip) goNextLine(); }}>
-            <div style={{ padding: "16px 32px", display: "flex", justifyContent: "space-between", alignItems: "center", flexShrink: 0, borderBottom: "1px solid #1F2937" }}>
-              <div>
-                <span style={{ fontSize: 15, fontWeight: 700, color: "#F9FAFB" }}>Alice in Wonderland</span>
-                <span style={{ fontSize: 13, color: "#4B5563", marginLeft: 12 }}>p.{page + 1}/{totalPages}</span>
-              </div>
+            <div style={{ padding: "12px 24px", display: "flex", justifyContent: "space-between", alignItems: "center", flexShrink: 0, borderBottom: "1px solid #1F2937" }}>
               <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-                <span style={{ fontSize: 12, color: "#818CF8", background: "rgba(129,140,248,0.1)", padding: "3px 10px", borderRadius: 20 }}>🤖 AI 사전</span>
+                <button onClick={(e) => { e.stopPropagation(); setView("home"); }}
+                  style={{ background: "none", border: "none", cursor: "pointer", color: "#6B7280", padding: 4, display: "flex" }}>
+                  <BackIcon />
+                </button>
+                <div>
+                  <span style={{ fontSize: 14, fontWeight: 700, color: "#F9FAFB" }}>{bookTitle || "PDF"}</span>
+                  <span style={{ fontSize: 12, color: "#4B5563", marginLeft: 10 }}>p.{page + 1}/{totalPages}</span>
+                </div>
+              </div>
+              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                <span style={{ fontSize: 11, color: "#818CF8", background: "rgba(129,140,248,0.1)", padding: "3px 10px", borderRadius: 20 }}>🤖 AI</span>
                 <span style={{ fontSize: 12, color: "#4B5563" }}>{currentLine + 1}/{lines.length}</span>
               </div>
             </div>
@@ -475,7 +524,7 @@ export default function App() {
                       transition: "all 0.5s cubic-bezier(0.4, 0, 0.2, 1)",
                       textAlign: "center", padding: isCur ? "24px 16px" : "8px 16px",
                       fontFamily: "Georgia, 'Times New Roman', serif",
-                      fontSize: isCur ? 26 : 18, lineHeight: 1.7,
+                      fontSize: isCur ? 24 : 16, lineHeight: 1.7,
                       color: isCur ? "#F9FAFB" : "#6B7280",
                       fontWeight: isCur ? 500 : 400,
                       pointerEvents: isCur ? "auto" : "none", zIndex: isCur ? 10 : 1,
@@ -502,6 +551,7 @@ export default function App() {
           </div>
         )}
 
+        {/* Tooltip */}
         {tooltip && (
           <div onClick={e => e.stopPropagation()} style={{ position: "fixed", bottom: 0, left: 0, right: 0, zIndex: 100, animation: "slideUp 0.25s ease" }}>
             <div style={{ maxWidth: 720, margin: "0 auto", padding: "0 16px 16px" }}>
